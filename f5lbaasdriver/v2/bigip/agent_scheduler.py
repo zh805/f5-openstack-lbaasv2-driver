@@ -193,6 +193,61 @@ class AvailabilityZoneFilter(AgentFilter):
         return result
 
 
+class LeastVipFilter(AgentFilter):
+
+    def select(self, context, plugin, lb, candidates, **kwargs):
+        if len(candidates) <= 1:
+            return candidates
+
+        min_counts = float('inf')
+        res = None
+        for candidate in candidates:
+            lb_counts = context.session.query(
+                agent_scheduler.LoadbalancerAgentBinding).filter_by(
+                agent_id=candidate['id']).count()
+
+            if lb_counts < min_counts:
+                min_counts = lb_counts
+                res = candidate
+
+        return [res]
+
+class WeightedRandomFilter(AgentFilter):
+
+    def select(self, context, plugin, lb, candidates, **kwargs):
+        if len(candidates) <= 1:
+            return candidates
+
+        agent_lb_counts = {}
+        for candidate in candidates:
+            lb_counts = context.session.query(
+                agent_scheduler.LoadbalancerAgentBinding).filter_by(
+                agent_id=candidate['id']).count()
+            agent_lb_counts[candidate] = lb_counts
+
+        lb_total = sum(agent_lb_counts.values())
+        agent_weight = {}
+        for k, v in agent_lb_counts.items():
+            w = 1 - float(v) / float(lb_total)
+            agent_weight[k] = w
+
+        def random_weight(weight_data):
+            LOG.debug("weight_data: {}".format(weight_data))
+            total = sum(weight_data.values())
+            ra = random.uniform(0, total)
+            curr_sum, ret = 0, None
+            keys = weight_data.keys()
+            for k in keys:
+                curr_sum += weight_data[k]
+                if ra <= curr_sum:
+                    ret = k
+                    break
+            return ret
+
+        candidate = random_weight(agent_weight)
+        return [candidate]
+
+
 class TenantScheduler(agent_scheduler.ChanceScheduler):
     """Finds an available agent for the tenant/environment."""
 
